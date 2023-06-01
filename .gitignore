@@ -1,0 +1,14 @@
+/data/
+data/*
+*.png
+.idea
+.idea/
+venv
+/venv
+/files
+*.jpg
+__pycache__
+__pycache__/
+runs/
+/dist
+/dist/*
