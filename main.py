@@ -12,29 +12,29 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 transform = transforms.Compose(
     [transforms.ToTensor(),
      transforms.Lambda(lambda x: x.repeat(3, 1, 1)),  # Duplicate single channel to get 3 channels
-     transforms.Resize((224,224)),  # ViT expects a higher resolution input, so we upscale MNIST images
+     transforms.Resize((72,72)),  # ViT expects a higher resolution input, so we upscale MNIST images
      transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])  # Use mean and std for 3 channels
 
 
 trainset = torchvision.datasets.MNIST(root='./data', train=True,
                                       download=True, transform=transform)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=64,
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=128,
                                           shuffle=True, num_workers=0)
 
 testset = torchvision.datasets.MNIST(root='./data', train=False,
                                      download=True, transform=transform)
-testloader = torch.utils.data.DataLoader(testset, batch_size=64,
+testloader = torch.utils.data.DataLoader(testset, batch_size=128,
                                          shuffle=False, num_workers=0)
 
 # Use Vision Transformer from timm library
-model = VisionTransformer(depth=1)
+model = VisionTransformer(img_size=72,patch_size=6,depth=8,attn_p=0.5)
 model.to(device)
 
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-
+# optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+optimizer = optim.Adam(model.parameters(),lr=0.001,weight_decay=0.0001)
 # Training loop
-for epoch in range(2):  # loop over the dataset multiple times
+for epoch in range(100):  # loop over the dataset multiple times
     running_loss = 0.0
     for i, data in (enumerate(tqdm(trainloader), 0)):
         inputs, labels = data[0].to(device), data[1].to(device)

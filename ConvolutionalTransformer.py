@@ -103,8 +103,8 @@ class Attention(nn.Module):
         super().__init__()
         self.n_heads = n_heads
         self.dim = dim
-        self.head_dim = dim // n_heads
-        self.scale = self.head_dim ** -0.5
+        # self.head_dim = dim // n_heads
+        # self.scale = self.head_dim ** -0.5
         self.number_of_patches = n_patches
 
         self.q = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=10, stride=1, padding="same", bias=False, groups=self.number_of_patches)
@@ -117,9 +117,9 @@ class Attention(nn.Module):
         self.k.weight.data = torch.ones((self.number_of_patches, 1, 10, 10))
         self.v.weight.data = torch.ones((self.number_of_patches, 1, 10, 10))
         #kaiming initialisation
-        torch.nn.init.kaiming_uniform_(self.q.weights, a=math.sqrt(5))
-        torch.nn.init.kaiming_uniform_(self.v.weights, a=math.sqrt(5))
-        torch.nn.init.kaiming_uniform_(self.k.weights, a=math.sqrt(5))
+        torch.nn.init.kaiming_uniform_(self.q.weight, a=math.sqrt(5))
+        torch.nn.init.kaiming_uniform_(self.v.weight, a=math.sqrt(5))
+        torch.nn.init.kaiming_uniform_(self.k.weight, a=math.sqrt(5))
 
         self.attn_drop = nn.Dropout(attn_p)
         self.proj = nn.Linear(dim, dim)
@@ -179,7 +179,7 @@ class Attention(nn.Module):
 
 
         #Get output matrices
-        output_mat = torch.empty((n_samples, n_tokens, 16, 16)).cuda()
+        output_mat = torch.empty((n_samples, n_tokens, dim_x, dim_y)).cuda()
         for sample in range(n_samples):
             output_mat[sample,:,:,:] = conv2d(v[sample,:,:,:].unsqueeze(0), alpha_matrix[sample,:,:,:,:], padding="same")
 
@@ -223,14 +223,14 @@ class MLP(nn.Module):
     drop : nn.Dropout
         Dropout layer.
     """
-    def __init__(self, in_features, hidden_features, out_features, p=0.):
+    def __init__(self, in_features, hidden_features, out_features, mlp_p=0.):
         super().__init__()
         self.conv1 = nn.Conv2d(in_features,hidden_features,kernel_size=3,padding="same")
         # self.fc1 = nn.Linear(in_features, hidden_features)
         self.act = nn.GELU()
         self.fc2 = nn.Linear(hidden_features, out_features)
         self.conv2 = nn.Conv2d(hidden_features, out_features, kernel_size=3, padding="same")
-        self.drop = nn.Dropout(p)
+        self.drop = nn.Dropout(mlp_p)
 
     def forward(self, x):
         """Run forward pass.
@@ -303,9 +303,10 @@ class Block(nn.Module):
         )
         self.norm2 = nn.LayerNorm(dim, eps=1e-6)
         self.mlp = MLP(
-                in_features=14**2+1,
-                hidden_features=int(14**2 * mlp_ratio),
-                out_features=14**2+1,
+                in_features=n_patches,
+                hidden_features=int(n_patches * mlp_ratio),
+                out_features=n_patches,
+                mlp_p=attn_p
         )
 
     def forward(self, x):
@@ -434,8 +435,9 @@ class VisionTransformer(nn.Module):
         # self.head = nn.Sequential(nn.Flatten(), nn.Linear(embed_dim*embed_dim, n_classes))
 
         #Fat version of head
-        self.head = nn.Sequential(nn.Conv2d(embed_dim * embed_dim, 1,kernel_size=embed_dim),
-                                  nn.AdaptiveAvgPool2d((math.sqrt(n_classes),math.sqrt(n_classes))),
+        self.head = nn.Sequential(nn.Conv2d(1, 1,kernel_size=embed_dim,padding="same"),
+                                  nn.AdaptiveAvgPool2d(output_size=int(math.sqrt(n_classes))),
+                                  nn.Conv2d(1, 1, kernel_size=1, padding="same"),
                                   nn.Flatten())
 
 
@@ -467,7 +469,7 @@ class VisionTransformer(nn.Module):
 
         x = self.norm(x)
 
-        cls_token_final = x[:, 0]  # just the CLS token
+        cls_token_final = x[:, 0].unsqueeze(1)  # just the CLS token
         x = self.head(cls_token_final)
 
         return x
