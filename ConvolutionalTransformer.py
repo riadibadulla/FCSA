@@ -1,3 +1,5 @@
+import math
+
 import torch.nn as nn
 import torch
 import torch
@@ -97,22 +99,20 @@ class Attention(nn.Module):
     attn_drop, proj_drop : nn.Dropout
         Dropout layers.
     """
-    def __init__(self, dim, n_heads=12, qkv_bias=True, attn_p=0., proj_p=0.):
+    def __init__(self, dim, n_heads=12, qkv_bias=True, attn_p=0., proj_p=0., n_patches=197):
         super().__init__()
         self.n_heads = n_heads
         self.dim = dim
         self.head_dim = dim // n_heads
         self.scale = self.head_dim ** -0.5
-        self.number_of_patches = 197
-        # self.q = nn.Conv2d(self.number_of_patches, self.number_of_patches, kernel_size=3,padding="same", groups=self.number_of_patches)
-        # self.v = nn.Conv2d(self.number_of_patches, self.number_of_patches, kernel_size=3,padding="same", groups=self.number_of_patches)
-        # self.k = nn.Conv2d(self.number_of_patches, self.number_of_patches, kernel_size=3,padding="same", groups=self.number_of_patches)
+        self.number_of_patches = n_patches
 
         self.q = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=10, stride=1, padding="same", bias=False, groups=self.number_of_patches)
         self.v = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=10,
                            stride=1, padding="same", bias=False, groups=self.number_of_patches)
         self.k = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=10,
                            stride=1, padding="same", bias=False, groups=self.number_of_patches)
+        #TODO: use kaimimg initialisation for weights
         self.q.weight.data = torch.ones((self.number_of_patches, 1, 10, 10))
         self.k.weight.data = torch.ones((self.number_of_patches, 1, 10, 10))
         self.v.weight.data = torch.ones((self.number_of_patches, 1, 10, 10))
@@ -125,6 +125,20 @@ class Attention(nn.Module):
         self.proj_drop = nn.Dropout(proj_p)
         # self.maxpool = nn.MaxPool2d(kernel_size=4)
         self.pool = nn.AdaptiveAvgPool2d(output_size=1)
+        self.softmax = nn.Softmax(dim=2)
+
+    def process_inputs(self, input, kernel):
+        img = torch.nn.functional.pad(input, (1, 1, 1, 1))
+        """Takes to tensors of image and kernel and pads image or kernel depending on which one is larger"""
+        if img.shape == kernel.shape:
+            return img, kernel
+        size_of_image = img.shape[2]
+        size_of_kernel = kernel.shape[2]
+        padding_size = abs(size_of_image - size_of_kernel) // 2
+        kernel = torch.nn.functional.pad(kernel, (padding_size, padding_size, padding_size, padding_size))
+        if kernel[0, 0, 0].shape != img[0, 0, 0].shape:
+            kernel = torch.nn.functional.pad(kernel, (0, 1, 0, 1))
+        return img, kernel
 
     def forward(self, x):
         """Run forward pass.
@@ -144,16 +158,35 @@ class Attention(nn.Module):
         q = self.q(x)  # (n_samples, n_patches + 1, 3 * dim)
         k = self.k(x)
         v = self.v(x)
-        alpha_matrix = torch.empty((n_samples, n_tokens, n_tokens, 1, 1)).cuda()
-        #Generate attention matrix
-        for sample in range(n_samples):
-            for i in range(n_tokens):
-                alpha_matrix[sample,i,:,:,:] = self.pool(conv2d(q[sample,i,:,:].unsqueeze(0).unsqueeze(0), k[sample,:,:,:].unsqueeze(1), padding="same"))
+
+        ##########################################
+        ### Attention Matrix normal calculation###
+        ##########################################
+        # alpha_matrix = torch.empty((n_samples, n_tokens, n_tokens, 1, 1))
+        # Generate attention matrix
+        # for sample in range(n_samples):
+        #     for i in range(n_tokens):
+        #         alpha_matrix[sample,i,:,:,:] = self.pool(conv2d(q[sample,i,:,:].unsqueeze(0).unsqueeze(0), k[sample,:,:,:].unsqueeze(1), padding="same"))
+
+        #######################################
+        #attention matrix using fft convolution
+        ########################################
+        q, k = self.process_inputs(q, k)
+        alpha_matrix = self.pool(torch.real(torch.fft.fftshift(torch.fft.ifft2(
+            torch.fft.fft2(q.unsqueeze(1).repeat(1, n_tokens, 1, 1, 1)) * torch.fft.fft2(k.unsqueeze(2).repeat(1, 1, n_tokens, 1, 1)))))[:, :, :, :-2, :-2])
+        alpha_matrix = self.softmax(alpha_matrix)
+
 
         #Get output matrices
         output_mat = torch.empty((n_samples, n_tokens, 16, 16)).cuda()
         for sample in range(n_samples):
             output_mat[sample,:,:,:] = conv2d(v[sample,:,:,:].unsqueeze(0), alpha_matrix[sample,:,:,:,:], padding="same")
+        #Tried to paralelise
+        # v, alpha_matrix = self.process_inputs(v,alpha_matrix)
+        # output_mat = torch.real(torch.fft.fftshift(torch.fft.ifft2(torch.fft.fft2(v.unsqueeze(1).repeat(1,n_tokens,1,1,1)) * torch.fft.fft2(alpha_matrix))))[:, :,
+        #          :, :-2, :-2]
+        # output_mat = torch.sum(output_mat, dim=2,dtype=torch.float32)
+
         return output_mat
 
 
@@ -255,7 +288,7 @@ class Block(nn.Module):
     mlp : MLP
         MLP module.
     """
-    def __init__(self, dim, n_heads, mlp_ratio=4.0, qkv_bias=True, p=0., attn_p=0.):
+    def __init__(self, dim, n_heads, mlp_ratio=4.0, qkv_bias=True, p=0., attn_p=0.,n_patches=197):
         super().__init__()
         self.norm1 = nn.LayerNorm([dim,dim], eps=1e-6)
         self.attn = Attention(
@@ -263,7 +296,8 @@ class Block(nn.Module):
                 n_heads=n_heads,
                 qkv_bias=qkv_bias,
                 attn_p=attn_p,
-                proj_p=p
+                proj_p=p,
+                n_patches = n_patches
         )
         self.norm2 = nn.LayerNorm(dim, eps=1e-6)
         self.mlp = MLP(
@@ -353,7 +387,7 @@ class VisionTransformer(nn.Module):
             img_size=224,
             patch_size=16,
             in_chans=3,
-            n_classes=10,
+            n_classes=100,
             embed_dim=768,
             depth=12,
             n_heads=12,
@@ -363,6 +397,8 @@ class VisionTransformer(nn.Module):
             attn_p=0.,
     ):
         super().__init__()
+
+        #TODO: Think of custom embedding,rather than hard codding it
         embed_dim = patch_size
         self.patch_embed = PatchEmbed(
                 img_size=img_size,
@@ -370,9 +406,9 @@ class VisionTransformer(nn.Module):
                 in_chans=in_chans,
                 embed_dim=embed_dim,
         )
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, patch_size,patch_size))
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim,embed_dim))
         self.pos_embed = nn.Parameter(
-                torch.zeros(1, 1 + self.patch_embed.n_patches, patch_size,patch_size)
+                torch.zeros(1, 1 + self.patch_embed.n_patches, embed_dim,embed_dim)
         )
         self.pos_drop = nn.Dropout(p=p)
 
@@ -385,13 +421,20 @@ class VisionTransformer(nn.Module):
                     qkv_bias=qkv_bias,
                     p=p,
                     attn_p=attn_p,
+                    n_patches = 1 + self.patch_embed.n_patches  # class patch+number of patches
                 )
                 for _ in range(depth)
             ]
         )
 
         self.norm = nn.LayerNorm([embed_dim,embed_dim], eps=1e-6)
-        self.head = nn.Sequential(nn.Flatten(), nn.Linear(embed_dim*embed_dim, n_classes))
+
+        # self.head = nn.Sequential(nn.Flatten(), nn.Linear(embed_dim*embed_dim, n_classes))
+
+        #Fat version of head
+        self.head = nn.Sequential(nn.Conv2d(embed_dim * embed_dim, 1,kernel_size=embed_dim),
+                                  nn.AdaptiveAvgPool2d((math.sqrt(n_classes),math.sqrt(n_classes))),
+                                  nn.Flatten())
 
 
     def forward(self, x):
