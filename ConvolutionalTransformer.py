@@ -112,13 +112,14 @@ class Attention(nn.Module):
                            stride=1, padding="same", bias=False, groups=self.number_of_patches)
         self.k = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=10,
                            stride=1, padding="same", bias=False, groups=self.number_of_patches)
-        #TODO: use kaimimg initialisation for weights
+        #weight matrics
         self.q.weight.data = torch.ones((self.number_of_patches, 1, 10, 10))
         self.k.weight.data = torch.ones((self.number_of_patches, 1, 10, 10))
         self.v.weight.data = torch.ones((self.number_of_patches, 1, 10, 10))
-        # q_weight = torch.Tensor(self.number_of_patches, self.number_of_patches, kernel_size, kernel_size)
-        # self.weights = nn.Parameter(weights)
-        # nn.init.kaiming_uniform_(self.weights, a=math.sqrt(5))
+        #kaiming initialisation
+        torch.nn.init.kaiming_uniform_(self.q.weights, a=math.sqrt(5))
+        torch.nn.init.kaiming_uniform_(self.v.weights, a=math.sqrt(5))
+        torch.nn.init.kaiming_uniform_(self.k.weights, a=math.sqrt(5))
 
         self.attn_drop = nn.Dropout(attn_p)
         self.proj = nn.Linear(dim, dim)
@@ -181,6 +182,7 @@ class Attention(nn.Module):
         output_mat = torch.empty((n_samples, n_tokens, 16, 16)).cuda()
         for sample in range(n_samples):
             output_mat[sample,:,:,:] = conv2d(v[sample,:,:,:].unsqueeze(0), alpha_matrix[sample,:,:,:,:], padding="same")
+
         #Tried to paralelise
         # v, alpha_matrix = self.process_inputs(v,alpha_matrix)
         # output_mat = torch.real(torch.fft.fftshift(torch.fft.ifft2(torch.fft.fft2(v.unsqueeze(1).repeat(1,n_tokens,1,1,1)) * torch.fft.fft2(alpha_matrix))))[:, :,
