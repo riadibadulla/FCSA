@@ -6,6 +6,8 @@ import torch
 from torch.nn.functional import unfold, fold, pad
 from torch.nn.functional import conv2d
 
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 class PatchEmbed(nn.Module):
     """Split image into patches and then embed them.
 
@@ -107,15 +109,15 @@ class Attention(nn.Module):
         # self.scale = self.head_dim ** -0.5
         self.number_of_patches = n_patches
 
-        self.q = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=10, stride=1, padding="same", bias=False, groups=self.number_of_patches)
-        self.v = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=10,
+        self.q = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=6, stride=1, padding="same", bias=False, groups=self.number_of_patches)
+        self.v = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=6,
                            stride=1, padding="same", bias=False, groups=self.number_of_patches)
-        self.k = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=10,
+        self.k = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=6,
                            stride=1, padding="same", bias=False, groups=self.number_of_patches)
         #weight matrics
-        self.q.weight.data = torch.ones((self.number_of_patches, 1, 10, 10))
-        self.k.weight.data = torch.ones((self.number_of_patches, 1, 10, 10))
-        self.v.weight.data = torch.ones((self.number_of_patches, 1, 10, 10))
+        self.q.weight.data = torch.ones((self.number_of_patches, 1, 6, 6))
+        self.k.weight.data = torch.ones((self.number_of_patches, 1, 6, 6))
+        self.v.weight.data = torch.ones((self.number_of_patches, 1, 6, 6))
         #kaiming initialisation
         torch.nn.init.kaiming_uniform_(self.q.weight, a=math.sqrt(5))
         torch.nn.init.kaiming_uniform_(self.v.weight, a=math.sqrt(5))
@@ -155,7 +157,7 @@ class Attention(nn.Module):
             Shape `(n_samples, n_patches + 1, dim)`.
         """
         n_samples, n_tokens, dim_x, dim_y = x.shape
-
+        #TODO: MAKE ONE CONVOLUTION FOR ALL THREE, THEN SPLIT
         q = self.q(x)  # (n_samples, n_patches + 1, 3 * dim)
         k = self.k(x)
         v = self.v(x)
@@ -163,8 +165,8 @@ class Attention(nn.Module):
         ##########################################
         ### Attention Matrix normal calculation###
         ##########################################
-        # alpha_matrix = torch.empty((n_samples, n_tokens, n_tokens, 1, 1))
-        # Generate attention matrix
+        # alpha_matrix = torch.empty((n_samples, n_tokens, n_tokens, 1, 1)).to(device)
+        # #Generate attention matrix
         # for sample in range(n_samples):
         #     for i in range(n_tokens):
         #         alpha_matrix[sample,i,:,:,:] = self.pool(conv2d(q[sample,i,:,:].unsqueeze(0).unsqueeze(0), k[sample,:,:,:].unsqueeze(1), padding="same"))
@@ -179,7 +181,7 @@ class Attention(nn.Module):
 
 
         #Get output matrices
-        output_mat = torch.empty((n_samples, n_tokens, dim_x, dim_y)).cuda()
+        output_mat = torch.empty((n_samples, n_tokens, dim_x, dim_y)).to(device)
         for sample in range(n_samples):
             output_mat[sample,:,:,:] = conv2d(v[sample,:,:,:].unsqueeze(0), alpha_matrix[sample,:,:,:,:], padding="same")
 
@@ -225,11 +227,11 @@ class MLP(nn.Module):
     """
     def __init__(self, in_features, hidden_features, out_features, mlp_p=0.):
         super().__init__()
-        self.conv1 = nn.Conv2d(in_features,hidden_features,kernel_size=3,padding="same")
+        self.conv1 = nn.Conv2d(in_features,hidden_features,kernel_size=6,padding="same")
         # self.fc1 = nn.Linear(in_features, hidden_features)
         self.act = nn.GELU()
         self.fc2 = nn.Linear(hidden_features, out_features)
-        self.conv2 = nn.Conv2d(hidden_features, out_features, kernel_size=3, padding="same")
+        self.conv2 = nn.Conv2d(hidden_features, out_features, kernel_size=6, padding="same")
         self.drop = nn.Dropout(mlp_p)
 
     def forward(self, x):
@@ -301,6 +303,13 @@ class Block(nn.Module):
                 proj_p=p,
                 n_patches = n_patches
         )
+
+        self.attention_heads = nn.ModuleList(
+            [Attention( dim, n_heads=n_heads, qkv_bias=qkv_bias, attn_p=attn_p, proj_p=p, n_patches=n_patches)
+                for _ in range(n_heads)
+            ]
+        )
+
         self.norm2 = nn.LayerNorm(dim, eps=1e-6)
         self.mlp = MLP(
                 in_features=n_patches,
@@ -322,10 +331,14 @@ class Block(nn.Module):
         torch.Tensor
             Shape `(n_samples, n_patches + 1, dim)`.
         """
-        x = x + self.attn(self.norm1(x))
-        x = x + self.mlp(self.norm2(x))
-
-        return x
+        new_x = torch.zeros_like(x)
+        new_x += x
+        for attention_layer in self.attention_heads:
+            new_x += attention_layer(self.norm1(x))
+        del x
+        # x = x + self.attn(self.norm1(new_x))
+        new_x = new_x + self.mlp(self.norm2(new_x))
+        return new_x
 
 
 class VisionTransformer(nn.Module):
