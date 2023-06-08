@@ -105,8 +105,6 @@ class Attention(nn.Module):
         super().__init__()
         self.n_heads = n_heads
         self.dim = dim
-        # self.head_dim = dim // n_heads
-        # self.scale = self.head_dim ** -0.5
         self.number_of_patches = n_patches
 
         self.q = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=6, stride=1, padding="same", bias=False, groups=self.number_of_patches)
@@ -124,7 +122,6 @@ class Attention(nn.Module):
         torch.nn.init.kaiming_uniform_(self.k.weight, a=math.sqrt(5))
 
         self.attn_drop = nn.Dropout(attn_p)
-        # self.maxpool = nn.MaxPool2d(kernel_size=4)
         self.pool = nn.AdaptiveAvgPool2d(output_size=1)
         self.softmax = nn.Softmax(dim=2)
 
@@ -156,14 +153,16 @@ class Attention(nn.Module):
         input_tensor = torch.nn.functional.pad(input_tensor,
                                                (padding_width, padding_width, padding_height, padding_height))
         new_input_size = input_tensor.shape[-1]
-        input_tensor = input_tensor.repeat(1, out_channels, 1, 1).reshape(batch_size, in_channels, out_channels,
-                                                                          new_input_size, new_input_size)
+        input_tensor = input_tensor.view(batch_size, in_channels, 1, new_input_size, new_input_size)
+        input_tensor = input_tensor.expand(-1, -1, out_channels, -1, -1)
+
         # Use unfold to create the sliding windows
         input_tensor = input_tensor.unfold(3, kernel_height, 1).unfold(4, kernel_width, 1)
         input_tensor = input_tensor.contiguous().view(batch_size, in_channels, out_channels, -1, kernel_height,
                                             kernel_width)
-        kernel = kernel.repeat(1, 1, input_tensor.shape[3], 1, 1).reshape(batch_size, out_channels, in_channels,
-                                                                            input_tensor.shape[3], kernel_height, kernel_width)
+        kernel = kernel.view(batch_size, out_channels, in_channels, 1, kernel_height, kernel_width)
+        kernel = kernel.expand(-1, -1, -1, input_tensor.shape[3], -1, -1)
+
         # TODO:dialation problem
         return (input_tensor * kernel).sum(dim=-1).sum(dim=-1).reshape(batch_size, in_channels, out_channels,
                                                                              height, width)
@@ -185,7 +184,6 @@ class Attention(nn.Module):
         #TODO: MAKE ONE CONVOLUTION FOR ALL THREE, THEN SPLIT
         q = self.q(x)  # (n_samples, n_patches + 1, 3 * dim)
         k = self.k(x)
-        v = self.v(x)
 
         ##########################################
         ### Attention Matrix normal calculation###
@@ -204,12 +202,13 @@ class Attention(nn.Module):
         #     torch.fft.fft2(q.unsqueeze(1).repeat(1, n_tokens, 1, 1, 1)) * torch.fft.fft2(k.unsqueeze(2).repeat(1, 1, n_tokens, 1, 1)))))[:, :, :, :-2, :-2])
         # alpha_matrix = self.softmax(alpha_matrix)
         alpha_matrix = self.perform_convolution_no_sum(q,k)
-
+        del q,k
+        x = self.v(x) # replaced v with x
         #Get output matrices
         output_mat = torch.empty((n_samples, n_tokens, dim_x, dim_y)).to(device)
         for sample in range(n_samples):
-            output_mat[sample,:,:,:] = conv2d(v[sample,:,:,:].unsqueeze(0), alpha_matrix[sample,:,:,:,:], padding="same")
-
+            output_mat[sample,:,:,:] = conv2d(x[sample,:,:,:].unsqueeze(0), alpha_matrix[sample,:,:,:,:], padding="same")
+        del alpha_matrix
         #Tried to paralelise
         # v, alpha_matrix = self.process_inputs(v,alpha_matrix)
         # output_mat = torch.real(torch.fft.fftshift(torch.fft.ifft2(torch.fft.fft2(v.unsqueeze(1).repeat(1,n_tokens,1,1,1)) * torch.fft.fft2(alpha_matrix))))[:, :,
@@ -507,8 +506,8 @@ class VisionTransformer(nn.Module):
 
         x = self.norm(x)
 
-        cls_token_final = x[:, 0].unsqueeze(1)  # just the CLS token
-        x = self.head(cls_token_final)
+        x = x[:, 0].unsqueeze(1)  # just the CLS token
+        x = self.head(x)
         return x
 
 # if __name__ == "__main__":
