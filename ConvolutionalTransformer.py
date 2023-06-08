@@ -124,8 +124,6 @@ class Attention(nn.Module):
         torch.nn.init.kaiming_uniform_(self.k.weight, a=math.sqrt(5))
 
         self.attn_drop = nn.Dropout(attn_p)
-        self.proj = nn.Linear(dim, dim)
-        self.proj_drop = nn.Dropout(proj_p)
         # self.maxpool = nn.MaxPool2d(kernel_size=4)
         self.pool = nn.AdaptiveAvgPool2d(output_size=1)
         self.softmax = nn.Softmax(dim=2)
@@ -142,6 +140,33 @@ class Attention(nn.Module):
         if kernel[0, 0, 0].shape != img[0, 0, 0].shape:
             kernel = torch.nn.functional.pad(kernel, (0, 1, 0, 1))
         return img, kernel
+
+    def perform_convolution_no_sum(self,input_tensor,kernel):
+        _, _, ker_height, ker_width = kernel.shape
+        if (ker_height%2==0):
+            kernel = torch.nn.functional.pad(kernel, (0, 1, 0, 1))
+        batch_size, in_channels, height, width = input_tensor.shape
+        kernel = kernel.unsqueeze(1).repeat(1, in_channels, 1, 1, 1)
+        _, out_channels, _, kernel_height, kernel_width = kernel.shape
+        # Compute padding
+        padding_height = kernel_height // 2
+        padding_width = kernel_width // 2
+
+        # Pad the input tensor
+        input_tensor = torch.nn.functional.pad(input_tensor,
+                                               (padding_width, padding_width, padding_height, padding_height))
+        new_input_size = input_tensor.shape[-1]
+        input_tensor = input_tensor.repeat(1, out_channels, 1, 1).reshape(batch_size, in_channels, out_channels,
+                                                                          new_input_size, new_input_size)
+        # Use unfold to create the sliding windows
+        input_tensor = input_tensor.unfold(3, kernel_height, 1).unfold(4, kernel_width, 1)
+        input_tensor = input_tensor.contiguous().view(batch_size, in_channels, out_channels, -1, kernel_height,
+                                            kernel_width)
+        kernel = kernel.repeat(1, 1, input_tensor.shape[3], 1, 1).reshape(batch_size, out_channels, in_channels,
+                                                                            input_tensor.shape[3], kernel_height, kernel_width)
+        # TODO:dialation problem
+        return (input_tensor * kernel).sum(dim=-1).sum(dim=-1).reshape(batch_size, in_channels, out_channels,
+                                                                             height, width)
 
     def forward(self, x):
         """Run forward pass.
@@ -174,11 +199,11 @@ class Attention(nn.Module):
         #######################################
         #attention matrix using fft convolution
         ########################################
-        q, k = self.process_inputs(q, k)
-        alpha_matrix = self.pool(torch.real(torch.fft.fftshift(torch.fft.ifft2(
-            torch.fft.fft2(q.unsqueeze(1).repeat(1, n_tokens, 1, 1, 1)) * torch.fft.fft2(k.unsqueeze(2).repeat(1, 1, n_tokens, 1, 1)))))[:, :, :, :-2, :-2])
-        alpha_matrix = self.softmax(alpha_matrix)
-
+        # q, k = self.process_inputs(q, k)
+        # alpha_matrix = self.pool(torch.real(torch.fft.fftshift(torch.fft.ifft2(
+        #     torch.fft.fft2(q.unsqueeze(1).repeat(1, n_tokens, 1, 1, 1)) * torch.fft.fft2(k.unsqueeze(2).repeat(1, 1, n_tokens, 1, 1)))))[:, :, :, :-2, :-2])
+        # alpha_matrix = self.softmax(alpha_matrix)
+        alpha_matrix = self.perform_convolution_no_sum(q,k)
 
         #Get output matrices
         output_mat = torch.empty((n_samples, n_tokens, dim_x, dim_y)).to(device)
@@ -484,6 +509,11 @@ class VisionTransformer(nn.Module):
 
         cls_token_final = x[:, 0].unsqueeze(1)  # just the CLS token
         x = self.head(cls_token_final)
-
         return x
 
+# if __name__ == "__main__":
+#     at = Attention( 1, n_heads=1, qkv_bias=False, attn_p=0, proj_p=0, n_patches=10)
+#     input = torch.ones(1,3,6,6)
+#     kernel = torch.ones(1,3,6,6)
+#     out = at.perform_convolution_no_sum(input,kernel)
+#     print(out.shape)
