@@ -7,7 +7,7 @@ from tqdm import tqdm
 from ConvolutionalTransformer import VisionTransformer
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
+print(device)
 # Load the MNIST dataset
 transform = transforms.Compose(
     [transforms.ToTensor(),
