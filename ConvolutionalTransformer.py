@@ -34,13 +34,11 @@ class PatchEmbed(nn.Module):
         Convolutional layer that does both the splitting into patches
         and their embedding.
     """
-    def __init__(self, img_size, patch_size, in_chans=3, embed_dim=768):
+    def __init__(self, img_size, patch_size):
         super().__init__()
         self.img_size = img_size
         self.patch_size = patch_size
-        self.n_patches = (img_size // patch_size) ** 2
-        self.learn_colours = nn.Conv2d(in_chans,1,kernel_size=9,padding="same")
-        self.gelu = nn.GELU()
+        self.n_patches = int((img_size // patch_size) ** 2)
     def forward(self, x):
         """Run forward pass.
 
@@ -55,8 +53,6 @@ class PatchEmbed(nn.Module):
             Shape `(n_samples, n_patches, embed_dim)`.
         """
 
-        x = self.learn_colours(x)
-        x = self.gelu(x)
         x = x.unfold(2, self.patch_size, self.patch_size).unfold(3, self.patch_size, self.patch_size)
 
         # Get the batch size and number of channels
@@ -222,11 +218,11 @@ class MLP(nn.Module):
         super().__init__()
 
         # self.conv1 = torch.nn.ConvTranspose2d(in_features, in_features, kernel_size=2,stride=2,groups=in_features)
-        self.conv1 = nn.Conv2d(in_features,in_features,kernel_size=11,padding="same")
+        self.conv1 = nn.Conv2d(in_features,in_features,kernel_size=11,padding="same",groups=in_features)
         self.act = nn.GELU()
         self.batch_norm = nn.BatchNorm2d(in_features)
         self.batch_norm2 = nn.BatchNorm2d(in_features)
-        self.conv2 = nn.Conv2d(in_features, in_features, kernel_size=11, padding="same")
+        self.conv2 = nn.Conv2d(in_features, in_features, kernel_size=11, padding="same",groups=in_features)
 
         self.drop = nn.Dropout2d(mlp_p)
 
@@ -257,25 +253,47 @@ class MLP(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, dim, n_heads, mlp_ratio=2.0, qkv_bias=True, p=0., attn_p=0.,n_patches=197):
+    def __init__(self, dim, n_heads, mlp_ratio=2.0, qkv_bias=True, p=0., attn_p=0.,n_patches=197,current_depth=0,last_layer=False):
         super().__init__()
+        self.last_layer = last_layer
+        self.image_sizes_at_each_depth = [110,80,50,20]
+        self.current_image_size = self.image_sizes_at_each_depth[current_depth]
+        self.patch_embed = PatchEmbed(
+            img_size=self.current_image_size,
+            patch_size=10)
+        self.n_patches = self.patch_embed.n_patches
+        if self.last_layer:
+            self.cls_token = nn.Parameter(torch.zeros(1, 1, dim,dim))
+            self.n_patches += 1
         self.norm1 = nn.LayerNorm([dim,dim], eps=1e-6)
         # self.norm1 = nn.BatchNorm2d(n_patches)
         self.attention_heads = nn.ModuleList(
-            [Attention( dim, n_heads=n_heads, qkv_bias=qkv_bias, attn_p=attn_p, proj_p=p, n_patches=n_patches)
+            [Attention( dim, n_heads=n_heads, qkv_bias=qkv_bias, attn_p=attn_p, proj_p=p, n_patches=self.n_patches)
                 for _ in range(n_heads)
             ]
         )
         self.norm2 = nn.LayerNorm([dim,dim], eps=1e-6)
         # self.norm2 = nn.BatchNorm2d(n_patches)
         self.mlp = MLP(
-                in_features=n_patches,
-                hidden_features=int(n_patches * mlp_ratio),
-                out_features=n_patches,
+                in_features=self.n_patches,
+                hidden_features=int(self.n_patches * mlp_ratio),
+                out_features=self.n_patches,
                 mlp_p=attn_p
         )
+        if not self.last_layer:
+            self.pool = nn.AdaptiveAvgPool2d(self.image_sizes_at_each_depth[current_depth+1])
+
 
     def forward(self, x):
+
+
+        x = self.patch_embed(x)
+
+        if self.last_layer:
+            n_samples = x.shape[0]
+            cls_token = self.cls_token.expand(n_samples, -1, -1,-1)
+            x = torch.cat((cls_token, x), dim=1)  # (n_samples, 1 + n_patches, embed_dim)
+
         new_x = torch.zeros_like(x)
         new_x += x
         for attention_layer in self.attention_heads:
@@ -283,6 +301,18 @@ class Block(nn.Module):
         del x
         # x = x + self.attn(self.norm1(new_x))
         new_x = new_x + self.mlp(self.norm2(new_x))
+        if not self.last_layer:
+            input_shape = list(new_x.shape)
+
+            # Calculate new height and width
+            new_height = new_width = int(math.sqrt(input_shape[1]) * input_shape[2])
+
+            # Reshape
+            new_x = new_x.view(input_shape[0], int(math.sqrt(input_shape[1])), input_shape[2], -1, input_shape[3]).permute(
+                0, 1, 3, 2, 4)
+            # Further reshape
+            new_x = new_x.contiguous().view(input_shape[0], new_height, new_width)
+            new_x = self.pool(new_x)
         return new_x
 
 
@@ -294,7 +324,7 @@ class VisionTransformer(nn.Module):
             in_chans=3,
             n_classes=100,
             embed_dim=768,
-            depth=12,
+            depth=5,
             n_heads=12,
             mlp_ratio=4.,
             qkv_bias=True,
@@ -302,19 +332,21 @@ class VisionTransformer(nn.Module):
             attn_p=0.,
     ):
         super().__init__()
-
         #TODO: Think of custom embedding,rather than hard codding it
+        self.learn_colours = nn.Conv2d(in_chans,1,kernel_size=9,padding="same")
+        self.gelu = nn.GELU()
+
         embed_dim = patch_size
-        self.patch_embed = PatchEmbed(
-                img_size=img_size,
-                patch_size=patch_size,
-                in_chans=in_chans,
-                embed_dim=embed_dim,
-        )
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim,embed_dim))
-        self.pos_embed = nn.Parameter(
-                torch.zeros(1, 1 + self.patch_embed.n_patches, embed_dim,embed_dim)
-        )
+        # self.patch_embed = PatchEmbed(
+        #         img_size=img_size,
+        #         patch_size=patch_size,
+        #         in_chans=in_chans,
+        #         embed_dim=embed_dim,
+        # )
+        # self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim,embed_dim))
+        # self.pos_embed = nn.Parameter(
+        #         torch.zeros(1, 1 + self.patch_embed.n_patches, embed_dim,embed_dim)
+        # )
         self.pos_drop = nn.Dropout(p=p)
 
         self.blocks = nn.ModuleList(
@@ -326,11 +358,14 @@ class VisionTransformer(nn.Module):
                     qkv_bias=qkv_bias,
                     p=p,
                     attn_p=attn_p,
-                    n_patches = 1 + self.patch_embed.n_patches  # class patch+number of patches
+                    current_depth = i,
+                    last_layer = True if i == depth-1 else False
                 )
-                for _ in range(depth)
+                for i in range(depth)
             ]
         )
+
+        # self.blocks[-1].last_layer = True
 
         self.norm = nn.LayerNorm([embed_dim,embed_dim], eps=1e-6)
 
@@ -342,15 +377,16 @@ class VisionTransformer(nn.Module):
 
 
     def forward(self, x):
+        x = self.learn_colours(x)
+        x = self.gelu(x)
         n_samples = x.shape[0]
-        x = self.patch_embed(x)
 
-        cls_token = self.cls_token.expand(
-                n_samples, -1, -1,-1
-        )  # (n_samples, 1, embed_dim)
-        x = torch.cat((cls_token, x), dim=1)  # (n_samples, 1 + n_patches, embed_dim)
-        x = x + self.pos_embed  # (n_samples, 1 + n_patches, embed_dim)
-        x = self.pos_drop(x)
+        # cls_token = self.cls_token.expand(
+        #         n_samples, -1, -1,-1
+        # )  # (n_samples, 1, embed_dim)
+        # x = torch.cat((cls_token, x), dim=1)  # (n_samples, 1 + n_patches, embed_dim)
+        # x = x + self.pos_embed  # (n_samples, 1 + n_patches, embed_dim)
+        # x = self.pos_drop(x)
 
         for block in self.blocks:
             x = block(x)
