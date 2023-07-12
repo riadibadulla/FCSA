@@ -187,48 +187,39 @@ class Attention(nn.Module):
         return output_mat
 
 
+# class MLP(nn.Module):
+#
+#     def __init__(self, in_features, hidden_features, out_features, mlp_p=0.):
+#         super().__init__()
+#
+#         # self.conv1 = torch.nn.ConvTranspose2d(in_features, in_features, kernel_size=2,stride=2,groups=in_features)
+#         self.conv1 = nn.Conv2d(in_features,in_features,kernel_size=11,padding="same")
+#         self.act = nn.GELU()
+#         self.batch_norm = nn.BatchNorm2d(in_features)
+#         self.batch_norm2 = nn.BatchNorm2d(in_features)
+#         self.conv2 = nn.Conv2d(in_features, in_features, kernel_size=11, padding="same")
+#
+#         self.drop = nn.Dropout2d(mlp_p)
+#
+#     def forward(self, x):
+#
+#         x = self.conv1(x)
+#         x = self.batch_norm(x)
+#         x = self.act(x)
+#         x = self.drop(x)
+#         x = self.conv2(x)
+#         x = self.batch_norm2(x)
+#         x = self.act(x)  # (n_samples, n_patches + 1, hidden_features)
+#         return x
+
+
 class MLP(nn.Module):
-    """Multilayer perceptron.
-
-    Parameters
-    ----------
-    in_features : int
-        Number of input features.
-
-    hidden_features : int
-        Number of nodes in the hidden layer.
-
-    out_features : int
-        Number of output features.
-
-    p : float
-        Dropout probability.
-
-    Attributes
-    ----------
-    fc : nn.Linear
-        The First linear layer.
-
-    act : nn.GELU
-        GELU activation function.
-
-    fc2 : nn.Linear
-        The second linear layer.
-
-    drop : nn.Dropout
-        Dropout layer.
-    """
     def __init__(self, in_features, hidden_features, out_features, mlp_p=0.):
         super().__init__()
-
-        # self.conv1 = torch.nn.ConvTranspose2d(in_features, in_features, kernel_size=2,stride=2,groups=in_features)
-        self.conv1 = nn.Conv2d(in_features,in_features,kernel_size=11,padding="same")
+        self.fc1 = nn.Linear(100, 200)
         self.act = nn.GELU()
-        self.batch_norm = nn.BatchNorm2d(in_features)
-        self.batch_norm2 = nn.BatchNorm2d(in_features)
-        self.conv2 = nn.Conv2d(in_features, in_features, kernel_size=11, padding="same")
-
-        self.drop = nn.Dropout2d(mlp_p)
+        self.fc2 = nn.Linear(200, 100)
+        self.drop = nn.Dropout(mlp_p)
 
     def forward(self, x):
         """Run forward pass.
@@ -243,16 +234,16 @@ class MLP(nn.Module):
         torch.Tensor
             Shape `(n_samples, n_patches +1, out_features)`
         """
-        # x = self.fc1(
-        #         x
-        # ) # (n_samples, n_patches + 1, hidden_features)
-        x = self.conv1(x)
-        x = self.batch_norm(x)
-        x = self.act(x)
-        x = self.drop(x)
-        x = self.conv2(x)
-        x = self.batch_norm2(x)
+        batch_size, channels, x_dim, y_dim = x.shape
+        x = x.view(batch_size, channels, -1)
+        x = self.fc1(
+                x
+        ) # (n_samples, n_patches + 1, hidden_features)
         x = self.act(x)  # (n_samples, n_patches + 1, hidden_features)
+        x = self.drop(x)  # (n_samples, n_patches + 1, hidden_features)
+        x = self.fc2(x)  # (n_samples, n_patches + 1, out_features)
+        x = self.drop(x)  # (n_samples, n_patches + 1, out_features)
+        x = x.view(batch_size, channels, x_dim, y_dim)
         return x
 
 

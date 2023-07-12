@@ -188,7 +188,7 @@ def evaluate():
     return accuracy
 
 
-net = VisionTransformer(img_size=110,patch_size=10,depth=4,attn_p=0.2,n_heads=1, mlp_ratio=1)
+net = VisionTransformer(img_size=110,patch_size=10,depth=4,attn_p=0.2,n_heads=3, mlp_ratio=1)
 # net = VisionTransformer(img_size=72,patch_size=6,depth=8,attn_p=0.5)
 net= nn.DataParallel(net)
 
