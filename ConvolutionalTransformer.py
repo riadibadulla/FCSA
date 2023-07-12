@@ -184,48 +184,37 @@ class Attention(nn.Module):
         return output_mat
 
 
+# class MLP(nn.Module):
+#
+#     def __init__(self, in_features, hidden_features, out_features, mlp_p=0.):
+#         super().__init__()
+#
+#         # self.conv1 = torch.nn.ConvTranspose2d(in_features, in_features, kernel_size=2,stride=2,groups=in_features)
+#         self.conv1 = nn.Conv2d(in_features,in_features,kernel_size=11,padding="same",groups=in_features)
+#         self.act = nn.GELU()
+#         self.batch_norm = nn.BatchNorm2d(in_features)
+#         self.batch_norm2 = nn.BatchNorm2d(in_features)
+#         self.conv2 = nn.Conv2d(in_features, in_features, kernel_size=11, padding="same",groups=in_features)
+#
+#         self.drop = nn.Dropout2d(mlp_p)
+#
+#     def forward(self, x):
+#         x = self.conv1(x)
+#         x = self.batch_norm(x)
+#         x = self.act(x)
+#         x = self.drop(x)
+#         x = self.conv2(x)
+#         x = self.batch_norm2(x)
+#         x = self.act(x)  # (n_samples, n_patches + 1, hidden_features)
+#         return x
+
 class MLP(nn.Module):
-    """Multilayer perceptron.
-
-    Parameters
-    ----------
-    in_features : int
-        Number of input features.
-
-    hidden_features : int
-        Number of nodes in the hidden layer.
-
-    out_features : int
-        Number of output features.
-
-    p : float
-        Dropout probability.
-
-    Attributes
-    ----------
-    fc : nn.Linear
-        The First linear layer.
-
-    act : nn.GELU
-        GELU activation function.
-
-    fc2 : nn.Linear
-        The second linear layer.
-
-    drop : nn.Dropout
-        Dropout layer.
-    """
     def __init__(self, in_features, hidden_features, out_features, mlp_p=0.):
         super().__init__()
-
-        # self.conv1 = torch.nn.ConvTranspose2d(in_features, in_features, kernel_size=2,stride=2,groups=in_features)
-        self.conv1 = nn.Conv2d(in_features,in_features,kernel_size=11,padding="same",groups=in_features)
+        self.fc1 = nn.Linear(100, 200)
         self.act = nn.GELU()
-        self.batch_norm = nn.BatchNorm2d(in_features)
-        self.batch_norm2 = nn.BatchNorm2d(in_features)
-        self.conv2 = nn.Conv2d(in_features, in_features, kernel_size=11, padding="same",groups=in_features)
-
-        self.drop = nn.Dropout2d(mlp_p)
+        self.fc2 = nn.Linear(200, 100)
+        self.drop = nn.Dropout(mlp_p)
 
     def forward(self, x):
         """Run forward pass.
@@ -240,25 +229,24 @@ class MLP(nn.Module):
         torch.Tensor
             Shape `(n_samples, n_patches +1, out_features)`
         """
-        # x = self.fc1(
-        #         x
-        # ) # (n_samples, n_patches + 1, hidden_features)
-        x = self.conv1(x)
-        x = self.batch_norm(x)
-        x = self.act(x)
-        x = self.drop(x)
-        x = self.conv2(x)
-        x = self.batch_norm2(x)
+        batch_size, channels, x_dim, y_dim = x.shape
+        x = x.view(batch_size, channels, -1)
+        x = self.fc1(
+                x
+        ) # (n_samples, n_patches + 1, hidden_features)
         x = self.act(x)  # (n_samples, n_patches + 1, hidden_features)
+        x = self.drop(x)  # (n_samples, n_patches + 1, hidden_features)
+        x = self.fc2(x)  # (n_samples, n_patches + 1, out_features)
+        x = self.drop(x)  # (n_samples, n_patches + 1, out_features)
+        x = x.view(batch_size, channels, x_dim, y_dim)
         return x
-
 
 class Block(nn.Module):
     def __init__(self, dim, n_heads, mlp_ratio=2.0, qkv_bias=True, p=0., attn_p=0.,n_patches=197,current_depth=0,last_layer=False):
         super().__init__()
         self.last_layer = last_layer
         self.current_depth = current_depth
-        self.image_sizes_at_each_depth = [110,80,50,20]
+        self.image_sizes_at_each_depth = [110,90,60,40,20,10]
         self.current_image_size = self.image_sizes_at_each_depth[current_depth]
         self.patch_embed = PatchEmbed(
             img_size=self.current_image_size,
@@ -268,9 +256,9 @@ class Block(nn.Module):
             self.pos_embed = nn.Parameter(
                     torch.zeros(1, self.n_patches, dim,dim)
             )
-        if self.last_layer:
-            self.cls_token = nn.Parameter(torch.zeros(1, 1, dim,dim))
-            self.n_patches += 1
+        # if self.last_layer:
+        #     self.cls_token = nn.Parameter(torch.zeros(1, 1, dim,dim))
+        #     self.n_patches += 1
         self.norm1 = nn.LayerNorm([dim,dim], eps=1e-6)
         # self.norm1 = nn.BatchNorm2d(n_patches)
         self.attention_heads = nn.ModuleList(
@@ -286,8 +274,8 @@ class Block(nn.Module):
                 out_features=self.n_patches,
                 mlp_p=attn_p
         )
-        if not self.last_layer:
-            self.pool = nn.AdaptiveAvgPool2d(self.image_sizes_at_each_depth[current_depth+1])
+        # if not self.last_layer:
+        self.pool = nn.AdaptiveAvgPool2d(self.image_sizes_at_each_depth[current_depth+1])
 
 
     def forward(self, x):
@@ -296,10 +284,10 @@ class Block(nn.Module):
         x = self.patch_embed(x)
         if self.current_depth == 0:
             x = x + self.pos_embed
-        if self.last_layer:
-            n_samples = x.shape[0]
-            cls_token = self.cls_token.expand(n_samples, -1, -1,-1)
-            x = torch.cat((cls_token, x), dim=1)  # (n_samples, 1 + n_patches, embed_dim)
+        # if self.last_layer:
+        #     n_samples = x.shape[0]
+        #     cls_token = self.cls_token.expand(n_samples, -1, -1,-1)
+        #     x = torch.cat((cls_token, x), dim=1)  # (n_samples, 1 + n_patches, embed_dim)
 
         new_x = torch.zeros_like(x)
         new_x += x
@@ -308,18 +296,19 @@ class Block(nn.Module):
         del x
         # x = x + self.attn(self.norm1(new_x))
         new_x = new_x + self.mlp(self.norm2(new_x))
-        if not self.last_layer:
-            input_shape = list(new_x.shape)
+        # if not self.last_layer:
 
-            # Calculate new height and width
-            new_height = new_width = int(math.sqrt(input_shape[1]) * input_shape[2])
+        input_shape = list(new_x.shape)
 
-            # Reshape
-            new_x = new_x.view(input_shape[0], int(math.sqrt(input_shape[1])), input_shape[2], -1, input_shape[3]).permute(
-                0, 1, 3, 2, 4)
-            # Further reshape
-            new_x = new_x.contiguous().view(input_shape[0], new_height, new_width)
-            new_x = self.pool(new_x)
+        # Calculate new height and width
+        new_height = new_width = int(math.sqrt(input_shape[1]) * input_shape[2])
+
+        # Reshape
+        new_x = new_x.view(input_shape[0], int(math.sqrt(input_shape[1])), input_shape[2], -1, input_shape[3]).permute(
+            0, 1, 3, 2, 4)
+        # Further reshape
+        new_x = new_x.contiguous().view(input_shape[0], new_height, new_width)
+        new_x = self.pool(new_x)
         return new_x
 
 
@@ -374,13 +363,14 @@ class VisionTransformer(nn.Module):
 
         # self.blocks[-1].last_layer = True
 
-        self.norm = nn.LayerNorm([embed_dim,embed_dim], eps=1e-6)
+        # self.norm = nn.LayerNorm([embed_dim,embed_dim], eps=1e-6)
 
         self.head = nn.Sequential(nn.Flatten(),
-                                    nn.Linear(100,120),
-                                    nn.ReLU(),
-                                    nn.Dropout(0.2),
-                                    nn.Linear(120,100))
+                                    nn.Linear(100,100),
+                                    # nn.ReLU(),
+                                    # nn.Dropout(0.2),
+                                    # nn.Linear(120,100)
+        )
 
 
     def forward(self, x):
@@ -398,9 +388,9 @@ class VisionTransformer(nn.Module):
         for block in self.blocks:
             x = block(x)
 
-        x = self.norm(x)
+        # x = self.norm(x)
 
-        x = x[:, 0].unsqueeze(1)  # just the CLS token
+        # x = x[:, 0].unsqueeze(1)  # just the CLS token
         x = self.head(x)
         return x
 

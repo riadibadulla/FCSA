@@ -27,9 +27,9 @@ print(torch.cuda.device_count())
 from torchvision.transforms.transforms import RandomRotation
 
 transform = transforms.Compose([
-    transforms.AutoAugment(transforms.AutoAugmentPolicy("cifar10")),
+    # transforms.AutoAugment(transforms.AutoAugmentPolicy("cifar10")),
     transforms.ToTensor(), transforms.Resize((110,110)),
-     transforms.RandomCrop(110, padding=9, padding_mode='reflect'),
+     # transforms.RandomCrop(110, padding=9, padding_mode='reflect'),
      transforms.RandomHorizontalFlip(),
      transforms.Normalize((0.5071, 0.4865, 0.4409), (0.2673, 0.2564, 0.2762))])
 
@@ -37,7 +37,7 @@ transform_test = transforms.Compose(
     [transforms.ToTensor(),
      transforms.Normalize((0.5071, 0.4865, 0.4409), (0.2673, 0.2564, 0.2762))])
 
-batch_size = 1
+batch_size = 128
 
 trainset = torchvision.datasets.CIFAR100(root='files/', train=True,
                                          download=True, transform=transform)
@@ -188,7 +188,7 @@ def evaluate():
     return accuracy
 
 
-net = VisionTransformer(img_size=110,patch_size=10,depth=4,attn_p=0.2,n_heads=4, mlp_ratio=1)
+net = VisionTransformer(img_size=110,patch_size=10,depth=5,attn_p=0.2,n_heads=4, mlp_ratio=1)
 # net = VisionTransformer(img_size=72,patch_size=6,depth=8,attn_p=0.5)
 net= nn.DataParallel(net)
 
@@ -198,8 +198,8 @@ net.to(device)
 
 criterion = nn.CrossEntropyLoss()
 # optimizer = optim.SGD(net.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
-optimizer = optim.AdamW(net.parameters(),lr=0.001, weight_decay=0.001)
-sch = optim.lr_scheduler.StepLR(optimizer=optimizer, step_size=20, gamma=0.2)
+optimizer = optim.AdamW(net.parameters(),lr=0.02, weight_decay=0.001)
+sch = optim.lr_scheduler.StepLR(optimizer=optimizer, step_size=15, gamma=0.2)
 criterion.to(device)
 
 train_acc, val_acc = train()
