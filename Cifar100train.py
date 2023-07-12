@@ -37,7 +37,7 @@ transform_test = transforms.Compose(
     [transforms.ToTensor(),
      transforms.Normalize((0.5071, 0.4865, 0.4409), (0.2673, 0.2564, 0.2762))])
 
-batch_size = 128
+batch_size = 1
 
 trainset = torchvision.datasets.CIFAR100(root='files/', train=True,
                                          download=True, transform=transform)
@@ -188,7 +188,7 @@ def evaluate():
     return accuracy
 
 
-net = VisionTransformer(img_size=110,patch_size=10,depth=4,attn_p=0.2,n_heads=1, mlp_ratio=1)
+net = VisionTransformer(img_size=110,patch_size=10,depth=4,attn_p=0.2,n_heads=4, mlp_ratio=1)
 # net = VisionTransformer(img_size=72,patch_size=6,depth=8,attn_p=0.5)
 net= nn.DataParallel(net)
 

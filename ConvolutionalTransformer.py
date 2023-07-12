@@ -39,6 +39,7 @@ class PatchEmbed(nn.Module):
         self.img_size = img_size
         self.patch_size = patch_size
         self.n_patches = int((img_size // patch_size) ** 2)
+        # self.n_patches = (1+(self.img_size-self.patch_size)//(self.patch_size//2))**2
     def forward(self, x):
         """Run forward pass.
 
@@ -105,15 +106,15 @@ class Attention(nn.Module):
         self.dim = dim
         self.number_of_patches = n_patches
 
-        self.q = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=9, stride=1, padding="same", bias=False, groups=self.number_of_patches)
-        self.v = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=9,
+        self.q = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=11, stride=1, padding="same", bias=False, groups=self.number_of_patches)
+        self.v = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=11,
                            stride=1, padding="same", bias=False, groups=self.number_of_patches)
-        self.k = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=9,
+        self.k = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=11,
                            stride=1, padding="same", bias=False, groups=self.number_of_patches)
         #weight matrics
-        self.q.weight.data = torch.ones((self.number_of_patches, 1, 9, 9))
-        self.k.weight.data = torch.ones((self.number_of_patches, 1, 9, 9))
-        self.v.weight.data = torch.ones((self.number_of_patches, 1, 9, 9))
+        self.q.weight.data = torch.ones((self.number_of_patches, 1, 11, 11))
+        self.k.weight.data = torch.ones((self.number_of_patches, 1, 11, 11))
+        self.v.weight.data = torch.ones((self.number_of_patches, 1, 11, 11))
         self.maxpool = nn.MaxPool2d(2)
         #kaiming initialisation
         torch.nn.init.kaiming_uniform_(self.q.weight, a=math.sqrt(5))
@@ -256,12 +257,17 @@ class Block(nn.Module):
     def __init__(self, dim, n_heads, mlp_ratio=2.0, qkv_bias=True, p=0., attn_p=0.,n_patches=197,current_depth=0,last_layer=False):
         super().__init__()
         self.last_layer = last_layer
+        self.current_depth = current_depth
         self.image_sizes_at_each_depth = [110,80,50,20]
         self.current_image_size = self.image_sizes_at_each_depth[current_depth]
         self.patch_embed = PatchEmbed(
             img_size=self.current_image_size,
             patch_size=10)
         self.n_patches = self.patch_embed.n_patches
+        if current_depth == 0:
+            self.pos_embed = nn.Parameter(
+                    torch.zeros(1, self.n_patches, dim,dim)
+            )
         if self.last_layer:
             self.cls_token = nn.Parameter(torch.zeros(1, 1, dim,dim))
             self.n_patches += 1
@@ -288,7 +294,8 @@ class Block(nn.Module):
 
 
         x = self.patch_embed(x)
-
+        if self.current_depth == 0:
+            x = x + self.pos_embed
         if self.last_layer:
             n_samples = x.shape[0]
             cls_token = self.cls_token.expand(n_samples, -1, -1,-1)
@@ -370,10 +377,10 @@ class VisionTransformer(nn.Module):
         self.norm = nn.LayerNorm([embed_dim,embed_dim], eps=1e-6)
 
         self.head = nn.Sequential(nn.Flatten(),
-                                    # nn.Linear(36,72),
-                                    # nn.ReLU(),
-                                    # nn.Dropout(0.2),
-                                    nn.Linear(100,100))
+                                    nn.Linear(100,120),
+                                    nn.ReLU(),
+                                    nn.Dropout(0.2),
+                                    nn.Linear(120,100))
 
 
     def forward(self, x):
