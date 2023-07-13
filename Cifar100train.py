@@ -20,7 +20,7 @@ from matplotlib import pyplot as plt
 from pylab import savefig
 import torch.optim as optim
 import pandas as pd
-
+from torch.optim.lr_scheduler import CosineAnnealingLR
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"running on {device}")
 print(torch.cuda.device_count())
@@ -199,7 +199,8 @@ net.to(device)
 criterion = nn.CrossEntropyLoss()
 # optimizer = optim.SGD(net.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
 optimizer = optim.AdamW(net.parameters(),lr=0.001, weight_decay=0.001)
-sch = optim.lr_scheduler.StepLR(optimizer=optimizer, step_size=20, gamma=0.2)
+#sch = optim.lr_scheduler.StepLR(optimizer=optimizer, step_size=20, gamma=0.2)
+sch = CosineAnnealingLR(optimizer,T_max=50)
 criterion.to(device)
 
 train_acc, val_acc = train()

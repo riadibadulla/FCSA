@@ -272,6 +272,7 @@ class Block(nn.Module):
         for attention_layer in self.attention_heads:
             new_x += attention_layer(self.norm1(x))
         del x
+        new_x = new_x/len(self.attention_heads)
         # x = x + self.attn(self.norm1(new_x))
         new_x = new_x + self.mlp(self.norm2(new_x))
         return new_x
