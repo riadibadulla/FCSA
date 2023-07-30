@@ -34,7 +34,7 @@ transform = transforms.Compose([
      transforms.Normalize((0.5071, 0.4865, 0.4409), (0.2673, 0.2564, 0.2762))])
 
 transform_test = transforms.Compose(
-    [transforms.ToTensor(), transforms.Resize((110,110)),
+    [transforms.ToTensor(), transforms.Resize((72,72)),
      transforms.Normalize((0.5071, 0.4865, 0.4409), (0.2673, 0.2564, 0.2762))])
 
 batch_size = 128
