@@ -1,11 +1,8 @@
 import math
-
 import torch.nn as nn
-import torch
 import torch
 from torch.nn.functional import unfold, fold, pad
 from torch.nn.functional import conv2d
-
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class PatchEmbed(nn.Module):
@@ -34,12 +31,13 @@ class PatchEmbed(nn.Module):
         Convolutional layer that does both the splitting into patches
         and their embedding.
     """
-    def __init__(self, img_size, patch_size, in_chans=3, embed_dim=768):
+    def __init__(self, img_size, patch_size, in_chans=3, embed_dim=96):
         super().__init__()
         self.img_size = img_size
         self.patch_size = patch_size
-        self.n_patches = (img_size // patch_size) ** 2
-        self.learn_colours = nn.Conv2d(in_chans,1,kernel_size=9,padding="same")
+        self.n_patches = (embed_dim // patch_size) ** 2
+        # self.learn_colours = nn.Conv2d(in_chans,1,kernel_size=9,padding="same")
+        self.learn_colours = nn.ConvTranspose2d(in_channels=3, out_channels=1, kernel_size=25, stride=1, padding=0, output_padding=0)
         self.gelu = nn.GELU()
     def forward(self, x):
         """Run forward pass.
@@ -109,22 +107,22 @@ class Attention(nn.Module):
         self.dim = dim
         self.number_of_patches = n_patches
 
-        self.q = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=9, stride=1, padding="same", bias=False, groups=self.number_of_patches)
-        self.v = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=9,
+        self.q = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=7, stride=1, padding="same", bias=False, groups=self.number_of_patches)
+        self.v = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=7,
                            stride=1, padding="same", bias=False, groups=self.number_of_patches)
-        self.k = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=9,
+        self.k = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=7,
                            stride=1, padding="same", bias=False, groups=self.number_of_patches)
         #weight matrics
-        self.q.weight.data = torch.ones((self.number_of_patches, 1, 9, 9))
-        self.k.weight.data = torch.ones((self.number_of_patches, 1, 9, 9))
-        self.v.weight.data = torch.ones((self.number_of_patches, 1, 9, 9))
+        # self.q.weight.data = torch.ones((self.number_of_patches, 1, 9, 9))
+        # self.k.weight.data = torch.ones((self.number_of_patches, 1, 9, 9))
+        # self.v.weight.data = torch.ones((self.number_of_patches, 1, 9, 9))
         self.maxpool = nn.MaxPool2d(2)
         #kaiming initialisation
         torch.nn.init.kaiming_uniform_(self.q.weight, a=math.sqrt(5))
         torch.nn.init.kaiming_uniform_(self.v.weight, a=math.sqrt(5))
         torch.nn.init.kaiming_uniform_(self.k.weight, a=math.sqrt(5))
 
-        self.attn_drop = nn.Dropout(attn_p)
+        self.attn_drop = nn.Dropout2d(attn_p)
         self.softmax = nn.Softmax(dim=2)
         # self.proj = nn.Conv2d(in_channels=self.number_of_patches, out_channels=self.number_of_patches, kernel_size=7,
         #                    stride=1, padding="same", bias=True, groups=self.number_of_patches)
@@ -178,7 +176,7 @@ class Attention(nn.Module):
 
         alpha_matrix = self.perform_convolution_no_sum(q,k)
         del q, k
-        alpha_matrix = self.softmax(alpha_matrix)
+        alpha_matrix = self.attn_drop(self.softmax(alpha_matrix))
         x = self.v(x) # replaced v with x
         #Get output matrices
         output_mat = torch.empty((n_samples, n_tokens, dim_x, dim_y)).to(device)
@@ -187,48 +185,39 @@ class Attention(nn.Module):
         return output_mat
 
 
+# class MLP(nn.Module):
+#
+#     def __init__(self, in_features, hidden_features, out_features, mlp_p=0.):
+#         super().__init__()
+#
+#         # self.conv1 = torch.nn.ConvTranspose2d(in_features, in_features, kernel_size=2,stride=2,groups=in_features)
+#         self.conv1 = nn.Conv2d(in_features,in_features,kernel_size=11,padding="same")
+#         self.act = nn.GELU()
+#         self.batch_norm = nn.BatchNorm2d(in_features)
+#         self.batch_norm2 = nn.BatchNorm2d(in_features)
+#         self.conv2 = nn.Conv2d(in_features, in_features, kernel_size=11, padding="same")
+#
+#         self.drop = nn.Dropout2d(mlp_p)
+#
+#     def forward(self, x):
+#
+#         x = self.conv1(x)
+#         x = self.batch_norm(x)
+#         x = self.act(x)
+#         x = self.drop(x)
+#         x = self.conv2(x)
+#         x = self.batch_norm2(x)
+#         x = self.act(x)  # (n_samples, n_patches + 1, hidden_features)
+#         return x
+
+
 class MLP(nn.Module):
-    """Multilayer perceptron.
-
-    Parameters
-    ----------
-    in_features : int
-        Number of input features.
-
-    hidden_features : int
-        Number of nodes in the hidden layer.
-
-    out_features : int
-        Number of output features.
-
-    p : float
-        Dropout probability.
-
-    Attributes
-    ----------
-    fc : nn.Linear
-        The First linear layer.
-
-    act : nn.GELU
-        GELU activation function.
-
-    fc2 : nn.Linear
-        The second linear layer.
-
-    drop : nn.Dropout
-        Dropout layer.
-    """
     def __init__(self, in_features, hidden_features, out_features, mlp_p=0.):
         super().__init__()
-
-        # self.conv1 = torch.nn.ConvTranspose2d(in_features, in_features, kernel_size=2,stride=2,groups=in_features)
-        self.conv1 = nn.Conv2d(in_features,in_features,kernel_size=11,padding="same")
+        self.fc1 = nn.Linear(64, 128)
         self.act = nn.GELU()
-        self.batch_norm = nn.BatchNorm2d(in_features)
-        self.batch_norm2 = nn.BatchNorm2d(in_features)
-        self.conv2 = nn.Conv2d(in_features, in_features, kernel_size=11, padding="same")
-
-        self.drop = nn.Dropout2d(mlp_p)
+        self.fc2 = nn.Linear(128, 64)
+        self.drop = nn.Dropout(mlp_p)
 
     def forward(self, x):
         """Run forward pass.
@@ -243,16 +232,16 @@ class MLP(nn.Module):
         torch.Tensor
             Shape `(n_samples, n_patches +1, out_features)`
         """
-        # x = self.fc1(
-        #         x
-        # ) # (n_samples, n_patches + 1, hidden_features)
-        x = self.conv1(x)
-        x = self.batch_norm(x)
-        x = self.act(x)
-        x = self.drop(x)
-        x = self.conv2(x)
-        x = self.batch_norm2(x)
+        batch_size, channels, x_dim, y_dim = x.shape
+        x = x.view(batch_size, channels, -1)
+        x = self.fc1(
+                x
+        ) # (n_samples, n_patches + 1, hidden_features)
         x = self.act(x)  # (n_samples, n_patches + 1, hidden_features)
+        x = self.drop(x)  # (n_samples, n_patches + 1, hidden_features)
+        x = self.fc2(x)  # (n_samples, n_patches + 1, out_features)
+        x = self.drop(x)  # (n_samples, n_patches + 1, out_features)
+        x = x.view(batch_size, channels, x_dim, y_dim)
         return x
 
 
@@ -272,7 +261,7 @@ class Block(nn.Module):
                 in_features=n_patches,
                 hidden_features=int(n_patches * mlp_ratio),
                 out_features=n_patches,
-                mlp_p=attn_p
+                mlp_p=p
         )
 
     def forward(self, x):
@@ -298,8 +287,9 @@ class VisionTransformer(nn.Module):
             n_heads=12,
             mlp_ratio=4.,
             qkv_bias=True,
-            p=0.,
-            attn_p=0.,
+            mlp_p=0.1,
+            pos_p=0.1,
+            attn_p=0.1,
     ):
         super().__init__()
 
@@ -309,13 +299,12 @@ class VisionTransformer(nn.Module):
                 img_size=img_size,
                 patch_size=patch_size,
                 in_chans=in_chans,
-                embed_dim=embed_dim,
         )
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim,embed_dim))
         self.pos_embed = nn.Parameter(
                 torch.zeros(1, 1 + self.patch_embed.n_patches, embed_dim,embed_dim)
         )
-        self.pos_drop = nn.Dropout(p=p)
+        #self.pos_drop = nn.Dropout(p=pos_p)
 
         self.blocks = nn.ModuleList(
             [
@@ -324,7 +313,7 @@ class VisionTransformer(nn.Module):
                     n_heads=n_heads,
                     mlp_ratio=mlp_ratio,
                     qkv_bias=qkv_bias,
-                    p=p,
+                    p=mlp_p,
                     attn_p=attn_p,
                     n_patches = 1 + self.patch_embed.n_patches  # class patch+number of patches
                 )
@@ -335,10 +324,13 @@ class VisionTransformer(nn.Module):
         self.norm = nn.LayerNorm([embed_dim,embed_dim], eps=1e-6)
 
         self.head = nn.Sequential(nn.Flatten(),
-                                    # nn.Linear(36,72),
-                                    # nn.ReLU(),
-                                    # nn.Dropout(0.2),
-                                    nn.Linear(100,100))
+                                    nn.Linear(64,256),
+                                    nn.GELU(),
+                                    nn.Dropout(0.5),
+                                    nn.Linear(256, 128),
+                                    nn.GELU(),
+                                    nn.Dropout(0.5),
+                                    nn.Linear(128,100))
 
 
     def forward(self, x):
@@ -350,7 +342,7 @@ class VisionTransformer(nn.Module):
         )  # (n_samples, 1, embed_dim)
         x = torch.cat((cls_token, x), dim=1)  # (n_samples, 1 + n_patches, embed_dim)
         x = x + self.pos_embed  # (n_samples, 1 + n_patches, embed_dim)
-        x = self.pos_drop(x)
+        #x = self.pos_drop(x)
 
         for block in self.blocks:
             x = block(x)

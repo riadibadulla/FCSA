@@ -20,7 +20,7 @@ from matplotlib import pyplot as plt
 from pylab import savefig
 import torch.optim as optim
 import pandas as pd
-
+from torch.optim.lr_scheduler import CosineAnnealingLR
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"running on {device}")
 print(torch.cuda.device_count())
@@ -28,16 +28,16 @@ from torchvision.transforms.transforms import RandomRotation
 
 transform = transforms.Compose([
     transforms.AutoAugment(transforms.AutoAugmentPolicy("cifar10")),
-    transforms.ToTensor(), transforms.Resize((110,110)),
-     transforms.RandomCrop(110, padding=9, padding_mode='reflect'),
+    transforms.ToTensor(), transforms.Resize((72,72)),
+     transforms.RandomCrop(72, padding=5, padding_mode='reflect'),
      transforms.RandomHorizontalFlip(),
      transforms.Normalize((0.5071, 0.4865, 0.4409), (0.2673, 0.2564, 0.2762))])
 
 transform_test = transforms.Compose(
-    [transforms.ToTensor(),
+    [transforms.ToTensor(), transforms.Resize((110,110)),
      transforms.Normalize((0.5071, 0.4865, 0.4409), (0.2673, 0.2564, 0.2762))])
 
-batch_size = 128
+batch_size = 1
 
 trainset = torchvision.datasets.CIFAR100(root='files/', train=True,
                                          download=True, transform=transform)
@@ -83,7 +83,7 @@ def train():
     best_val_loss = 10000
     best_val_acc = 0
 
-    for epoch in range(0,200):  # loop over the dataset multiple times
+    for epoch in range(0,100):  # loop over the dataset multiple times
 
         running_loss = 0.0
         running_accuarcy = 0
@@ -188,7 +188,7 @@ def evaluate():
     return accuracy
 
 
-net = VisionTransformer(img_size=110,patch_size=10,depth=4,attn_p=0.2,n_heads=1, mlp_ratio=1)
+net = VisionTransformer(img_size=72,patch_size=8,depth=8,attn_p=0.1, mlp_p=0.1, pos_p=0, n_heads=4, mlp_ratio=2)
 # net = VisionTransformer(img_size=72,patch_size=6,depth=8,attn_p=0.5)
 net= nn.DataParallel(net)
 
@@ -198,8 +198,9 @@ net.to(device)
 
 criterion = nn.CrossEntropyLoss()
 # optimizer = optim.SGD(net.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
-optimizer = optim.AdamW(net.parameters(),lr=0.001, weight_decay=0.001)
-sch = optim.lr_scheduler.StepLR(optimizer=optimizer, step_size=20, gamma=0.2)
+optimizer = optim.AdamW(net.parameters(),lr=0.001, weight_decay=0.0001)
+#sch = optim.lr_scheduler.StepLR(optimizer=optimizer, step_size=20, gamma=0.2)
+sch = CosineAnnealingLR(optimizer,T_max=50)
 criterion.to(device)
 
 train_acc, val_acc = train()
